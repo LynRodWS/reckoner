@@ -3,16 +3,21 @@
 set -x
 set -e
 
-python --version
+# Install Go
+curl -LO https://golang.org/dl/go1.15.8.linux-amd64.tar.gz
 
-apt-get update
-apt-get install python3-pip
+tar -C /usr/local -xzf go1.15.8.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin
+go version
 
+# build
 cd /reckoner
-pip3 install .
-reckoner --version
+make build
 
-curl -LO https://github.com/ovh/venom/releases/download/v0.27.0/venom.linux-amd64
+mv /reckoner/bin/reckoner /usr/local/bin/reckoner
+reckoner version
+
+curl -LO https://github.com/ovh/venom/releases/download/v0.28.0/venom.linux-amd64
 mv venom.linux-amd64 /usr/local/bin/venom
 chmod +x /usr/local/bin/venom
 
