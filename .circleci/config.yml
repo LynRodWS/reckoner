@@ -17,28 +17,97 @@ version: 2.1
 orbs:
   rok8s: fairwinds/rok8s-scripts@11
 
+executors:
+  python-3-7:
+    docker:
+      - image: circleci/python:3.7
+  python-3-8:
+    docker:
+      - image: circleci/python:3.8
+
 references:
-  e2e_configuration: &e2e_configuration
-    pre_script: end_to_end_testing/pre.sh
-    script: end_to_end_testing/run.sh
+  e2e_configuration_python: &e2e_configuration_python
+    pre_script: end_to_end_testing/pre_python.sh
+    script: end_to_end_testing/run_python.sh
+    command_runner_image: quay.io/reactiveops/ci-images:v11-buster
+    enable_docker_layer_caching: true
+    store-test-results: /tmp/test-results
+    attach-workspace: true
+    workspace-location: /tmp/binaries
+    kind_version: 0.10.0
+    requires:
+      - build-3-8
+      - build-3-7
+    filters:
+      branches:
+        only: /.*/
+      tags:
+        ignore: /v.*/
+  e2e_configuration_go: &e2e_configuration_go
+    pre_script: end_to_end_testing/pre_go.sh
+    script: end_to_end_testing/run_go.sh
     command_runner_image: quay.io/reactiveops/ci-images:v11-buster
     enable_docker_layer_caching: true
     store-test-results: /tmp/test-results
     kind_version: 0.10.0
     requires:
-      - test
+      - test_go
     filters:
       branches:
         only: /.*/
       tags:
         ignore: /.*/
 jobs:
-  test:
+  test_go:
     working_directory: /go/src/github.com/fairwindsops/reckoner
     docker:
       - image: circleci/golang:1.15
         environment:
           GO111MODULE: "on"
+    steps:
+      - checkout
+      - run: go mod download && go mod verify
+      - run: go test -v ./... -coverprofile=coverage.txt -covermode=atomic
+      - run: bash <(curl -s https://codecov.io/bash)
+  build-3-7:
+    executor: python-3-7
+    working_directory: ~/reckoner
+    steps:
+      - run:
+          name: Setup PATH to support pip user installs
+          command: echo 'export PATH=$PATH:/home/circleci/.local/bin' >> $BASH_ENV
+      - checkout
+      - run:
+          name: Unit Tests
+          command: |
+            pip install --user -r development-requirements.txt
+            pip install --user -e .
+            reckoner --version
+            pytest --cov ./
+            codecov
+  build-3-8:
+    executor: python-3-8
+    working_directory: ~/reckoner
+    steps:
+      - run:
+          name: Setup PATH to support pip user installs
+          command: echo 'export PATH=$PATH:/home/circleci/.local/bin' >> $BASH_ENV
+      - checkout
+      - run:
+          name: Unit Tests
+          command: |
+            pip install --user -r development-requirements.txt
+            pip install --user -e .
+            reckoner --version
+            pytest --cov ./
+            codecov
+  release_python:
+    executor: python-3-8
+    environment:
+      PYPI_USERNAME: ReactiveOps
+      GITHUB_ORGANIZATION: $CIRCLE_PROJECT_USERNAME
+      GITHUB_REPOSITORY: $CIRCLE_PROJECT_REPONAME
+    working_directory: ~/reckoner
     steps:
       - checkout
       - run:
@@ -77,30 +146,52 @@ jobs:
           command: |
             cd ./dist
             aws s3 sync ./ s3://reckoner.docs.fairwinds.com --delete
-
-
 workflows:
   version: 2
   build_and_test:
     jobs:
-      - test:
+      - test_go:
           filters:
             tags:
               ignore: /.*/
             branches:
               only: /.*/
+      - build-3-7:
+          filters:
+            tags:
+              only: /.*/
+            branches:
+              only: /.*/
+      - build-3-8:
+          filters:
+            tags:
+              only: /.*/
+            branches:
+              only: /.*/
       - rok8s/kubernetes_e2e_tests:
-          name: "End-To-End Kubernetes 1.18"
+          name: "[go] End-To-End Kubernetes 1.18"
           kind_node_image: "kindest/node:v1.18.15@sha256:5c1b980c4d0e0e8e7eb9f36f7df525d079a96169c8a8f20d8bd108c0d0889cc4"
-          <<: *e2e_configuration
+          <<: *e2e_configuration_go
       - rok8s/kubernetes_e2e_tests:
-          name: "End-To-End Kubernetes 1.19"
+          name: "[go] End-To-End Kubernetes 1.19"
           kind_node_image: "kindest/node:v1.19.7@sha256:a70639454e97a4b733f9d9b67e12c01f6b0297449d5b9cbbef87473458e26dca"
-          <<: *e2e_configuration
+          <<: *e2e_configuration_go
       - rok8s/kubernetes_e2e_tests:
-          name: "End-To-End Kubernetes 1.20"
+          name: "[go] End-To-End Kubernetes 1.20"
           kind_node_image: "kindest/node:v1.20.2@sha256:8f7ea6e7642c0da54f04a7ee10431549c0257315b3a634f6ef2fecaaedb19bab"
-          <<: *e2e_configuration
+          <<: *e2e_configuration_go
+      - rok8s/kubernetes_e2e_tests:
+          name: "[python] End-To-End Kubernetes 1.18"
+          kind_node_image: "kindest/node:v1.18.15@sha256:5c1b980c4d0e0e8e7eb9f36f7df525d079a96169c8a8f20d8bd108c0d0889cc4"
+          <<: *e2e_configuration_python
+      - rok8s/kubernetes_e2e_tests:
+          name: "[python] End-To-End Kubernetes 1.19"
+          kind_node_image: "kindest/node:v1.19.7@sha256:a70639454e97a4b733f9d9b67e12c01f6b0297449d5b9cbbef87473458e26dca"
+          <<: *e2e_configuration_python
+      - rok8s/kubernetes_e2e_tests:
+          name: "[python] End-To-End Kubernetes 1.20"
+          kind_node_image: "kindest/node:v1.20.2@sha256:8f7ea6e7642c0da54f04a7ee10431549c0257315b3a634f6ef2fecaaedb19bab"
+          <<: *e2e_configuration_python
       - rok8s/docker_build_and_push:
           name: build-and-push-container
           docker-push: true
@@ -114,8 +205,9 @@ workflows:
           requires:
             - build-3-7
             - build-3-8
-            - "End-To-End Kubernetes 1.18.8"
-            - "End-To-End Kubernetes 1.19.1"
+            - "[python] End-To-End Kubernetes 1.18"
+            - "[python] End-To-End Kubernetes 1.19"
+            - "[python] End-To-End Kubernetes 1.20"
           filters:
             branches:
               ignore: /pull\/[0-9]+/
@@ -123,7 +215,7 @@ workflows:
               ignore: /.*/
   release:
     jobs:
-      - release:
+      - release_python:
           filters:
             tags:
               only: /.*/
